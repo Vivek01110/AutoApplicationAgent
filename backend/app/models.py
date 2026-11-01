@@ -487,6 +487,14 @@ class CitizenProfile(BaseModel):
     def document(self, doc_key: str) -> DocumentRef | None:
         return next((d for d in self.documents if d.doc_key == doc_key), None)
 
+    def add_document(self, ref: DocumentRef) -> None:
+        self.documents = [d for d in self.documents if d.doc_key != ref.doc_key]
+        self.documents.append(ref)
+
+    def masked_summary(self) -> dict[str, str]:
+        from .security import mask_profile
+        return mask_profile(self)
+
     def available_references(self) -> list[str]:
         """Symbolic references the agent may use, for the system prompt.
 

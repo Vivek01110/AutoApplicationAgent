@@ -117,6 +117,7 @@ def build_user_turn_prompt(
     available_profile_refs: list[str] | None = None,
     last_action_feedback: str | None = None,
     pending_human_reply: str | None = None,
+    captcha_solved: bool = False,
 ) -> str:
     """Constructs the prompt for the current observation step."""
     sections = [
@@ -127,7 +128,10 @@ def build_user_turn_prompt(
     ]
 
     if observation.has_captcha:
-        sections.append("⚠️ DETECTED CAPTCHA ON PAGE. You must call ask_human(kind='captcha', ...).")
+        if captcha_solved:
+            sections.append("ℹ️ CAPTCHA on this page has already been solved by the citizen. Do NOT ask for CAPTCHA again.")
+        else:
+            sections.append("⚠️ DETECTED CAPTCHA ON PAGE. You must call ask_human(kind='captcha', ...).")
     if observation.has_otp_field:
         sections.append("⚠️ DETECTED OTP FIELD ON PAGE. You must call ask_human(kind='otp', ...).")
     if observation.error_banners:

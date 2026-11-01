@@ -21,6 +21,7 @@ import shutil
 import stat
 import tempfile
 import threading
+import time
 from collections.abc import Iterable
 from datetime import date
 from enum import Enum
@@ -483,6 +484,14 @@ class JobDataStore:
                 return self._dek(job_id, create=False).decrypt(path.read_bytes())
             except InvalidToken as e:
                 raise CryptoError(f"record {name} for job {job_id} is corrupt or tampered") from e
+
+    def save_screenshot(self, job_id: str, png_bytes: bytes) -> str:
+        validate_job_id(job_id)
+        out_dir = self.settings.screenshots_dir / job_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"receipt_{int(time.time())}.png"
+        path.write_bytes(png_bytes)
+        return str(path)
 
     # -- documents ----------------------------------------------------------
 

@@ -104,6 +104,14 @@ async def create_job(req: CreateJobRequest) -> Job:
                 gap = analyze_gaps(plan, profile, job.service)
                 _JOB_GAPS[job_id] = gap
                 job.status = JobStatus.AWAITING_MISSING_DATA if gap.questions_for_user else JobStatus.INTAKE
+
+                hub = get_hub()
+                await hub.broadcast(job_id, {
+                    "type": "plan_ready",
+                    "plan": plan.model_dump(),
+                    "gap_report": gap.model_dump(),
+                    "status": job.status.value,
+                })
             else:
                 job.status = JobStatus.AWAITING_PORTAL_CONFIRMATION
                 job.pending_request = HumanRequest(
@@ -119,6 +127,16 @@ async def create_job(req: CreateJobRequest) -> Job:
                 "service": job.service.model_dump() if job.service else None,
                 "resolution": res.model_dump() if res else None,
             })
+            if job.pending_request:
+                await hub.broadcast(job_id, {
+                    "type": "human_request",
+                    "request": job.pending_request.model_dump(mode="json"),
+                })
+            if res.message_for_user:
+                await hub.broadcast(job_id, {
+                    "type": "chat",
+                    "text": res.message_for_user,
+                })
         except Exception as e:
             logger.error("Resolution failed for job %s: %s", job_id, e)
             job.status = JobStatus.FAILED
@@ -270,7 +288,14 @@ async def upload_document(
     except ValueError:
         doc_kind = DocumentKind.OTHER
 
-    ref = store.save_document(job_id, doc_key, content, filename, mime_type, kind=doc_kind)
+    ref = store.save_document(
+        job_id=job_id,
+        doc_key=doc_key,
+        kind=doc_kind,
+        filename=filename,
+        mime_type=mime_type,
+        data=content,
+    )
 
     # Attach to citizen profile
     profile = store.load_profile(job_id) or CitizenProfile()

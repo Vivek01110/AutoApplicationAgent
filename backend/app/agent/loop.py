@@ -91,10 +91,27 @@ class AgentLoop:
         self.receipt: Receipt | None = None
         self.last_feedback: str | None = None
         self.consecutive_failures: int = 0
+        self.captcha_solved_urls: set[str] = set()
+
+    async def _emit_step(self, step: AgentStep) -> None:
+        if self.on_step:
+            res = self.on_step(step)
+            if asyncio.iscoroutine(res):
+                await res
+
+    async def _emit_human_request(self, req: HumanRequest) -> None:
+        if self.on_human_request:
+            res = self.on_human_request(req)
+            if asyncio.iscoroutine(res):
+                await res
 
     def resume_with_reply(self, reply: HumanReply) -> None:
         """Deliver user reply to resume paused loop."""
         self.pending_human_reply = reply
+        if reply.captcha_solved:
+            current_url = self.session.page.url if self.session and self.session.page else ""
+            if current_url:
+                self.captcha_solved_urls.add(current_url)
         if self.pending_human_request and self.pending_human_request.kind == HumanRequestKind.CONFIRM_SUBMIT:
             if reply.approved or (reply.text and reply.text.lower() in ("yes", "y", "confirm", "proceed")):
                 self.submit_guard.confirmed = True
@@ -116,8 +133,7 @@ class AgentLoop:
                 error=f"Exceeded max steps limit ({self.settings.agent_max_steps})",
             )
             self.steps.append(step)
-            if self.on_step:
-                await self.on_step(step)
+            await self._emit_step(step)
             return StepStatus.ERROR
 
         started = time.monotonic()
@@ -128,7 +144,8 @@ class AgentLoop:
         self.injection_guard.check_observation(obs)
 
         # 2. Check for interactive obstacles that require immediate human intervention
-        if obs.has_captcha and not (self.pending_human_reply and self.pending_human_reply.captcha_solved):
+        is_captcha_solved = (obs.url in self.captcha_solved_urls) or (self.pending_human_reply and self.pending_human_reply.captcha_solved)
+        if obs.has_captcha and not is_captcha_solved:
             req = HumanRequest(
                 kind=HumanRequestKind.CAPTCHA,
                 question="A CAPTCHA is present on the page. Please solve it on the live browser preview and click 'Done, resume'.",
@@ -150,10 +167,8 @@ class AgentLoop:
             )
             self.steps.append(step)
             self.step_no += 1
-            if self.on_step:
-                await self.on_step(step)
-            if self.on_human_request:
-                await self.on_human_request(req)
+            await self._emit_step(step)
+            await self._emit_human_request(req)
             return StepStatus.WAITING_HUMAN
 
         # Prepare user turn prompt
@@ -175,6 +190,7 @@ class AgentLoop:
             available_profile_refs=self.profile.available_references(),
             last_action_feedback=self.last_feedback,
             pending_human_reply=reply_text,
+            captcha_solved=is_captcha_solved,
         )
 
         sys_prompt = build_system_prompt()
@@ -214,8 +230,7 @@ class AgentLoop:
             )
             self.steps.append(step)
             self.step_no += 1
-            if self.on_step:
-                await self.on_step(step)
+            await self._emit_step(step)
             await self.session.wait(1.0)
             return StepStatus.OK
 
@@ -262,10 +277,8 @@ class AgentLoop:
             )
             self.steps.append(step)
             self.step_no += 1
-            if self.on_step:
-                await self.on_step(step)
-            if self.on_human_request:
-                await self.on_human_request(req)
+            await self._emit_step(step)
+            await self._emit_human_request(req)
             return StepStatus.WAITING_HUMAN
 
         # Handle finish
@@ -274,8 +287,11 @@ class AgentLoop:
             summary = tool_input.get("summary", "Application successfully completed.")
 
             receipt_shot_path = None
-            if obs.screenshot and self.store:
-                receipt_shot_path = self.store.save_screenshot(self.job_id, obs.screenshot)
+            if obs.screenshot and self.store and hasattr(self.store, "save_screenshot"):
+                try:
+                    receipt_shot_path = self.store.save_screenshot(self.job_id, obs.screenshot)
+                except Exception as e:
+                    logger.warning("could not save receipt screenshot: %s", e)
 
             self.receipt = Receipt(
                 job_id=self.job_id,
@@ -306,8 +322,7 @@ class AgentLoop:
             )
             self.steps.append(step)
             self.step_no += 1
-            if self.on_step:
-                await self.on_step(step)
+            await self._emit_step(step)
             return StepStatus.OK
 
         # Handle save_progress
@@ -331,8 +346,7 @@ class AgentLoop:
             )
             self.steps.append(step)
             self.step_no += 1
-            if self.on_step:
-                await self.on_step(step)
+            await self._emit_step(step)
             return StepStatus.OK
 
         # Execute browser action
@@ -348,6 +362,7 @@ class AgentLoop:
 
             # Run action
             action_res = await self.actions.run(tool_name, tool_input)
+            logger.info("tool %s %s -> ok=%s url=%s msg=%s", tool_name, tool_input, action_res.ok, action_res.url_after, action_res.message)
 
             # Check navigation domain guard
             if action_res.url_after:
@@ -384,8 +399,7 @@ class AgentLoop:
             )
             self.steps.append(step)
             self.step_no += 1
-            if self.on_step:
-                await self.on_step(step)
+            await self._emit_step(step)
             return StepStatus.OK if action_res.ok else StepStatus.ERROR
 
         except GuardViolation as gv:
@@ -415,10 +429,8 @@ class AgentLoop:
                 )
                 self.steps.append(step)
                 self.step_no += 1
-                if self.on_step:
-                    await self.on_step(step)
-                if self.on_human_request:
-                    await self.on_human_request(req)
+                await self._emit_step(step)
+                await self._emit_human_request(req)
                 return StepStatus.WAITING_HUMAN
 
             step = AgentStep(
@@ -437,8 +449,9 @@ class AgentLoop:
             )
             self.steps.append(step)
             self.step_no += 1
-            if self.on_step:
-                await self.on_step(step)
+            await self._emit_step(step)
+            self.last_feedback = f"Action blocked by safety guard: {gv.message}"
+            return StepStatus.BLOCKED
             self.last_feedback = f"Action blocked by safety guard: {gv.message}"
             return StepStatus.BLOCKED
 
