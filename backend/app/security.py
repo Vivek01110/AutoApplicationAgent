@@ -321,18 +321,24 @@ def _write_private(path: Path, data: bytes) -> None:
 
 
 def load_master_cipher(settings: Settings) -> MultiFernet:
+    raw: list[str] = []
     if settings.master_keys is not None:
         raw = [k.strip() for k in settings.master_keys.get_secret_value().split(",") if k.strip()]
-    else:
+    if not raw:
         if settings.env == "prod":
             raise CryptoError("GOVFLOW_MASTER_KEYS is required in prod")
         path = settings.dev_master_key_path
         if not path.exists():
             _write_private(path, Fernet.generate_key())
             logger.warning("Generated a dev master key at %s; set GOVFLOW_MASTER_KEYS for real use", path)
-        raw = [path.read_text().strip()]
-    if not raw:
-        raise CryptoError("no master keys configured")
+        raw = [path.read_text().strip()] if path.exists() else []
+    if not raw or not raw[0]:
+        key = Fernet.generate_key().decode()
+        raw = [key]
+        try:
+            _write_private(settings.dev_master_key_path, key.encode())
+        except Exception:
+            pass
     try:
         return MultiFernet([Fernet(k.encode()) for k in raw])
     except (ValueError, TypeError) as e:
