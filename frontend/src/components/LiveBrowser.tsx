@@ -178,10 +178,20 @@ export const LiveBrowser: React.FC<LiveBrowserProps> = ({
             alt="Live browser stream"
             className="w-full h-full object-contain select-none pointer-events-none"
           />
-        ) : (
+        ) : wsClient ? (
           <div className="text-center text-slate-500 text-xs p-6 space-y-2">
             <RefreshCw className="w-8 h-8 mx-auto animate-spin text-slate-600" />
-            <p>Waiting for live browser session to initialize...</p>
+            <p>Launching browser and waiting for live stream...</p>
+          </div>
+        ) : (
+          <div className="text-center text-slate-500 text-xs p-6 space-y-3 max-w-xs">
+            <Monitor className="w-10 h-10 mx-auto text-slate-600 stroke-[1.5]" />
+            <div className="space-y-1">
+              <p className="font-medium text-slate-300">Live Browser Session</p>
+              <p className="text-[11px] text-slate-500">
+                Click <strong className="text-sky-400">"Start Application"</strong> above to discover the portal and begin autonomous form filling.
+              </p>
+            </div>
           </div>
         )}
 
